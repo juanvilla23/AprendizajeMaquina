@@ -1,0 +1,28 @@
+# Entorno virtual
+venvTaller1/
+
+# Base de datos
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+Datos/data_accidentes.sqlite3
+
+*.sqlite3
