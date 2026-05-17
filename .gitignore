@@ -1,5 +1,6 @@
 # Entorno virtual
 venvTaller1/
+venv/
 
 # Base de datos
 *.sqlite3
