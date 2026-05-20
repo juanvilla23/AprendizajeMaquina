@@ -1,21 +1,14 @@
 # Entorno virtual
 venvTaller1/
 venv/
-.venv/
 
 # Datos locales (archivos grandes — no subir a GitHub)
 Datos/Raw/
 Datos/Staging/
 Datos/Trusted/
 Datos/**/*.sqlite3
+# Base de datos
 *.sqlite3
-
-# Copias legacy en Exploración
-Exploración/Datos/csv/
-
-# Datos tabulares y comprimidos pesados
-*.csv
-*.zip
 
 # Python
 __pycache__/
@@ -35,3 +28,11 @@ build/
 # OS
 Thumbs.db
 .DS_Store
+
+Datos/data_accidentes.sqlite3
+
+*.sqlite3
+*.csv
+
+Datos/Raw/clima.csv
+
