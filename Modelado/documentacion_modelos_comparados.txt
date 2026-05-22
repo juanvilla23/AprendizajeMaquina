@@ -1,0 +1,438 @@
+================================================================================
+  DOCUMENTACIÓN — MODELOS COMPARADOS, HIPERPARÁMETROS Y MÉTRICAS
+  Taller: Aprendizaje de Máquina — Predicción de accidentes con clima
+================================================================================
+
+Fecha de referencia: mayo 2026
+Notebooks fuente:
+  - JoinXcodex/Join.ipynb
+  - Modelado/modeladoRandomForest.ipynb
+  - Modelado/modeladoHistGradientBoosting.ipynb
+  - Modelado/comparacion_modelos.ipynb (tabla final)
+
+Artefactos de métricas:
+  - Modelado/artifacts/metricas_baseline_sgd.csv
+  - Modelado/artifacts/metricas_rf.csv
+  - Modelado/artifacts/metricas_hgb.csv
+  - Modelado/artifacts/split_meta.json
+
+
+================================================================================
+1. OBJETIVO DEL PROBLEMA
+================================================================================
+
+Predecir si en una combinación barrio-hora (BARRIO + TW) ocurre un accidente
+de tránsito (target = 1) a partir de variables climáticas, temporales y
+señales históricas del barrio.
+
+El universo de modelado (df_modelo) une clima con accidentes:
+  - Filas totales del universo: ~7,4 millones
+  - Positivos (accidentes): ~112.575 (~1,51% del universo)
+  - Clase muy desbalanceada → se usan umbrales de decisión y, para RF/HGB/SGD
+    tuned, entrenamiento sobre muestra balanceada.
+
+
+================================================================================
+2. DATOS Y PREPROCESAMIENTO (Join.ipynb)
+================================================================================
+
+2.1 Fuentes
+  - Datos/Raw/accidentes.csv
+  - Datos/Trusted/features_accidentes.csv
+  - Datos/Staging/clima_limpio.csv
+
+2.2 Llaves de unión
+  - BARRIO + TW (barrio-hora)
+
+2.3 Target
+  - target = 1 si hubo accidente en esa barrio-hora
+  - target = 0 en caso contrario
+
+2.4 Features principales (27 columnas numéricas en el modelo)
+  Variables climáticas:
+    temperature, dewPoint, humidity, windSpeed, uvIndex
+
+  Variables temporales / calendario:
+    es_fin_semana, es_festivo
+    hora_sin, hora_cos
+    dia_semana_sin, dia_semana_cos
+    dia_ano_sin, dia_ano_cos
+
+  Señal histórica del barrio:
+    prom_accidentes_historico_barrio
+      (reconstruida sin fuga temporal con cumsum por BARRIO)
+
+  Codificación categórica:
+    barrio_id (label encoding)
+    summary_* (one-hot de summary_agrupado; categorías raras → "Otros")
+
+  Columnas excluidas del vector X:
+    target, TW, BARRIO, summary, summary_agrupado
+
+2.5 Split temporal (BLOQUE 6 — Join.ipynb)
+  - Tipo: partición temporal 80/20 por TW (NO aleatorio)
+  - Fecha de corte: 2019-06-11 02:00:00
+  - Train temporal (X_train completo): ~5,98M filas (desbalanceado)
+  - Test temporal (X_test): ~1,46M filas
+  - Positivos en test: 24.517
+  - Negativos en test: 1.433.895
+
+2.6 Exportación para modelado en notebooks separados
+  - Datos/Trusted/train_balanceado.csv
+      ~176.116 filas, balanceo 50/50 (misma cantidad de positivos y negativos)
+  - Datos/Trusted/test_modelo.csv
+      ~1.458.412 filas (distribución real del test temporal)
+  - Modelado/artifacts/split_meta.json (fecha_corte, columnas, conteos)
+
+
+================================================================================
+3. BASELINE (Join.ipynb — BLOQUE 7)
+================================================================================
+
+Modelo: siempre predice 0 (sin accidente).
+
+Hiperparámetros: ninguno (regla fija).
+
+Umbral de decisión: no aplica ("-").
+
+Métricas en test (~1,46M filas):
+  accuracy   = 0.9832
+  precision  = 0.0000
+  recall     = 0.0000
+  f1         = 0.0000
+  pr_auc     = 0.0168
+  roc_auc    = NaN
+
+Matriz de confusión:
+  TP=0, FP=0, FN=24.517, TN=1.433.895
+
+Interpretación: alto accuracy por desbalance, pero no detecta ningún accidente.
+
+
+================================================================================
+4. SGD CLASSIFIER (Join.ipynb)
+================================================================================
+
+4.1 Modelo base — SGD balanceado (BLOQUE 8–10)
+  Pipeline:
+    StandardScaler → SGDClassifier
+
+  Hiperparámetros:
+    loss            = "log_loss"        (regresión logística)
+    class_weight    = "balanced"
+    max_iter        = 1000
+    tol             = 1e-3
+    random_state    = 42
+    n_jobs          = -1
+    alpha           = (default sklearn)
+    penalty         = (default sklearn)
+
+  Entrenamiento: X_train completo (~5,9M filas, desbalanceado)
+  Evaluación:    X_test en memoria (~1,46M filas)
+
+  Umbral final seleccionado: 0.80
+
+  Métricas en test:
+    accuracy   = 0.9402
+    precision  = 0.0928
+    recall     = 0.2917
+    f1         = 0.1409
+    pr_auc     = 0.0723
+    roc_auc    = 0.7768
+    TP=7152, FP=69880, FN=17365, TN=1364015
+
+4.2 Tuning SGD (celda de hiperparámetros — Join.ipynb)
+  Validación interna: 80% primeras filas de X_train / 20% últimas (temporal)
+  Criterio de selección: mejor F1 en validación interna
+
+  Grilla probada (5 configuraciones):
+    alpha ∈ {0.0001, 0.00005, 0.0005}
+    penalty ∈ {"l2", "elasticnet"}
+    max_iter = 1000 (todas)
+    loss = "log_loss", class_weight = "balanced"
+
+  Mejor configuración encontrada:
+    alpha    = 0.00005
+    penalty  = "elasticnet"
+    max_iter = 1000
+
+4.3 Modelo final — SGD tuned (celda final — Join.ipynb)
+  Pipeline:
+    StandardScaler(copy=False) → SGDClassifier
+
+  Hiperparámetros finales:
+    loss            = "log_loss"
+    alpha           = 0.00005
+    penalty         = "elasticnet"
+    max_iter        = 1000
+    tol             = 1e-3
+    random_state    = 42
+    n_jobs          = -1
+    (sin class_weight: train_balanceado ya es 50/50)
+
+  Entrenamiento: train_balanceado.csv (~176k filas)
+  Evaluación:    test_modelo.csv por chunks de 200.000 filas
+
+  Umbral final: 0.85
+
+  Métricas en test (exportadas a metricas_baseline_sgd.csv):
+    accuracy   = 0.9504
+    precision  = 0.1012
+    recall     = 0.2475
+    f1         = 0.1436
+    pr_auc     = 0.0739
+    roc_auc    = 0.7747
+    TP=6069, FP=53922, FN=18448, TN=1379973
+
+  Nota memoria: no se entrena sobre X_train completo por MemoryError (~6M filas
+  fuerzan conversión a float64 >1 GB). Estrategia alineada con RF/HGB tuned.
+
+
+================================================================================
+5. RANDOM FOREST (modeladoRandomForest.ipynb)
+================================================================================
+
+5.1 Modelo base
+  Hiperparámetros:
+    n_estimators    = 100
+    min_samples_leaf = 5
+    max_depth       = (sin límite, default None)
+    random_state    = 42
+    n_jobs          = -1
+
+  Entrenamiento: train_balanceado.csv
+  Evaluación:    test_modelo.csv por chunks (CHUNK_SIZE = 300.000)
+
+  Umbral final: 0.80
+
+  Métricas en test:
+    accuracy   = 0.9469
+    precision  = 0.1042
+    recall     = 0.2837
+    f1         = 0.1524
+    pr_auc     = 0.0769
+    roc_auc    = 0.8069
+    TP=6956, FP=59825, FN=17561, TN=1374070
+
+5.2 Tuning Random Forest
+  Validación interna: 80/20 temporal sobre train_balanceado
+  Criterio: mejor F1 en validación interna
+
+  Grilla probada (5 configuraciones):
+    n_estimators     ∈ {80, 120, 150, 200}
+    max_depth        ∈ {14, 18, 22}
+    min_samples_leaf ∈ {10, 20, 30}
+    max_features     = "sqrt" (todas)
+
+  Mejor configuración encontrada:
+    n_estimators     = 150
+    max_depth        = 18
+    min_samples_leaf = 10
+    max_features     = "sqrt"
+
+5.3 Modelo final — Random Forest tuned
+  Hiperparámetros finales:
+    n_estimators     = 150
+    max_depth        = 18
+    min_samples_leaf = 10
+    max_features     = "sqrt"
+    random_state     = 42
+    n_jobs           = -1
+
+  Entrenamiento: train_balanceado.csv
+  Evaluación:    test_modelo.csv por chunks
+
+  Umbral final (mejor F1 en barrido 0.05–0.95): 0.80
+
+  Métricas en test (exportadas a metricas_rf.csv):
+    accuracy   = 0.9467
+    precision  = 0.1062
+    recall     = 0.2926
+    f1         = 0.1558
+    pr_auc     = 0.0806
+    roc_auc    = 0.8087
+    TP=7173, FP=60399, FN=17344, TN=1373496
+
+5.4 Importancia de variables (RF base)
+  Variables más relevantes reportadas en el notebook:
+    1. prom_accidentes_historico_barrio
+    2. hora_cos, hora_sin
+    3. dia_ano_sin, dia_ano_cos
+    4. variables climáticas (temperature, humidity, etc.)
+
+
+================================================================================
+6. HIST GRADIENT BOOSTING (modeladoHistGradientBoosting.ipynb)
+================================================================================
+
+6.1 Modelo base — HistGradientBoostingClassifier
+  Hiperparámetros:
+    max_iter            = 200
+    learning_rate       = 0.1
+    max_depth           = None
+    min_samples_leaf    = 20
+    random_state        = 42
+    early_stopping      = True
+    validation_fraction = 0.1
+    n_iter_no_change    = 15
+
+  Entrenamiento: train_balanceado.csv
+  Evaluación:    test_modelo.csv por chunks (CHUNK_SIZE = 300.000)
+
+  Umbral final: 0.85
+
+  Métricas en test:
+    accuracy   = 0.9583
+    precision  = 0.1207
+    recall     = 0.2353
+    f1         = 0.1596
+    pr_auc     = 0.0834
+    roc_auc    = 0.8109
+    TP=5770, FP=42031, FN=18747, TN=1391864
+
+6.2 Tuning HistGradientBoosting
+  Validación interna: 80/20 temporal sobre train_balanceado
+  Criterio: mejor F1 en validación interna
+
+  Grilla probada (5 configuraciones):
+    max_iter           ∈ {100, 150, 200, 250}
+    learning_rate      ∈ {0.05, 0.06, 0.08}
+    max_leaf_nodes     ∈ {31, 63}
+    min_samples_leaf   ∈ {20, 30, 40}
+    l2_regularization  ∈ {0.0, 0.1, 0.2}
+    early_stopping     = True
+
+  Mejor configuración encontrada:
+    max_iter           = 200
+    learning_rate      = 0.06
+    max_leaf_nodes     = 31
+    min_samples_leaf   = 20
+    l2_regularization  = 0.1
+
+6.3 Modelo final — HistGradientBoosting tuned
+  Hiperparámetros finales:
+    max_iter           = 200
+    learning_rate      = 0.06
+    max_leaf_nodes     = 31
+    min_samples_leaf   = 20
+    l2_regularization  = 0.1
+    random_state       = 42
+    early_stopping     = True
+
+  Entrenamiento: train_balanceado.csv
+  Evaluación:    test_modelo.csv por chunks
+
+  Umbral final (mejor F1 en barrido): 0.85
+
+  Métricas en test (exportadas a metricas_hgb.csv):
+    accuracy   = 0.9585
+    precision  = 0.1216
+    recall     = 0.2359
+    f1         = 0.1605
+    pr_auc     = 0.0835
+    roc_auc    = 0.8114
+    TP=5783, FP=41779, FN=18734, TN=1392116
+
+
+================================================================================
+7. TABLA COMPARATIVA FINAL (modelos exportados / tuned)
+================================================================================
+
+Todos evaluados sobre el mismo test temporal (~1.458.412 filas, 24.517 positivos).
+
+Ordenado por F1-score descendente:
+
+  Modelo                        Umbral  Acc     Prec    Rec     F1      PR-AUC  ROC-AUC
+  -------------------------------------------------------------------------------------
+  HistGradientBoosting tuned    0.85    0.9585  0.1216  0.2359  0.1605  0.0835  0.8114
+  Random Forest tuned           0.80    0.9467  0.1062  0.2926  0.1558  0.0806  0.8087
+  SGD tuned                     0.85    0.9504  0.1012  0.2475  0.1436  0.0739  0.7747
+  Baseline siempre 0            -       0.9832  0.0000  0.0000  0.0000  0.0168  NaN
+
+Referencias adicionales (modelos base, no en CSV final unificado):
+  SGD balanceado (base)         0.80    0.9402  0.0928  0.2917  0.1409  0.0723  0.7768
+  Random Forest (base)          0.80    0.9469  0.1042  0.2837  0.1524  0.0769  0.8069
+  HistGradientBoosting (base)   0.85    0.9583  0.1207  0.2353  0.1596  0.0834  0.8109
+
+
+================================================================================
+8. ANÁLISIS COMPARATIVO BREVE
+================================================================================
+
+8.1 Mejor F1 y PR-AUC
+  - HistGradientBoosting tuned lidera en F1 (0.1605) y PR-AUC (0.0835).
+  - Random Forest tuned tiene el mayor recall (0.2926): detecta más accidentes,
+    pero con más falsos positivos.
+  - SGD tuned es el más simple y rápido, con F1 intermedio (0.1436).
+
+8.2 Precision vs Recall
+  - HGB tuned: mayor precision (0.1216), menor recall (0.2359) → predicciones
+    positivas más confiables, pero deja más accidentes sin detectar.
+  - RF tuned: mayor recall (0.2926), menor precision (0.1062) → captura más
+    accidentes a costa de más alarmas falsas.
+  - SGD tuned: equilibrio intermedio.
+
+8.3 ROC-AUC (orden de ranking)
+  1. HistGradientBoosting tuned  (0.8114)
+  2. Random Forest tuned          (0.8087)
+  3. SGD tuned                    (0.7747)
+
+8.4 Baseline
+  - Accuracy alto (0.9832) es engañoso por desbalance.
+  - No sirve para detectar accidentes (recall = 0).
+
+8.5 Señales más importantes (según análisis en notebooks)
+  - prom_accidentes_historico_barrio (dominante en RF)
+  - Componentes temporales cíclicas (hora_sin/cos, dia_ano_sin/cos)
+  - Variables climáticas (temperature, humidity, windSpeed, summary_*)
+
+
+================================================================================
+9. METODOLOGÍA DE EVALUACIÓN COMÚN
+================================================================================
+
+  - Split temporal estricto (sin fuga de futuro al entrenamiento).
+  - Test con distribución real (~1,68% positivos).
+  - Modelos tuned entrenados en train_balanceado (50/50) para manejar desbalance
+    y limitar uso de RAM.
+  - Umbral de decisión ajustado por barrido (no fijo en 0.5) optimizando F1.
+  - Métricas reportadas: accuracy, precision, recall, f1, pr_auc, roc_auc,
+    TP, FP, FN, TN.
+  - En datasets desbalanceados, F1 y PR-AUC son más informativos que accuracy.
+
+
+================================================================================
+10. CÓMO REPRODUCIR LA COMPARACIÓN
+================================================================================
+
+  1. Ejecutar Join.ipynb hasta exportar CSVs y, al final, celda SGD tuned
+     → genera Modelado/artifacts/metricas_baseline_sgd.csv
+
+  2. Ejecutar modeladoRandomForest.ipynb hasta celda final (RF tuned + export)
+     → genera Modelado/artifacts/metricas_rf.csv
+
+  3. Ejecutar modeladoHistGradientBoosting.ipynb hasta celda final (HGB tuned)
+     → genera Modelado/artifacts/metricas_hgb.csv
+
+  4. Ejecutar Modelado/comparacion_modelos.ipynb
+     → concatena los 3 CSV y guarda tabla_comparativa_modelos.csv
+
+
+================================================================================
+11. CONCLUSIÓN
+================================================================================
+
+El modelo recomendado según F1 y PR-AUC en test temporal es:
+
+  >>> HistGradientBoosting tuned (umbral 0.85)
+
+Si la prioridad del negocio es maximizar la detección de accidentes (recall),
+Random Forest tuned (umbral 0.80) es la alternativa más adecuada.
+
+El baseline y el accuracy alto sin recall demuestran que, en problemas
+desbalanceados, siempre debe reportarse F1, PR-AUC y matriz de confusión
+además del accuracy.
+
+================================================================================
+  FIN DEL DOCUMENTO
+================================================================================

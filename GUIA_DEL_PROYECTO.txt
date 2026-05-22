@@ -1,0 +1,283 @@
+================================================================================
+  GUÍA DEL PROYECTO — TALLER APRENDIZAJE DE MÁQUINA
+  Predicción de accidentes de tránsito con variables climáticas (Medellín)
+================================================================================
+
+Esta guía describe QUÉ HAY en cada carpeta y archivo, a grandes rasgos.
+No es la documentación técnica de modelos (esa está en
+Modelado/documentacion_modelos_comparados.txt).
+
+
+================================================================================
+VISIÓN GENERAL DEL FLUJO
+================================================================================
+
+  Exploración/     →  Primer contacto con datos crudos, limpieza inicial
+  EDA/            →  Análisis exploratorio (gráficos, distribuciones, calidad)
+  JoinXcodex/     →  Unir accidentes + clima + features; pipeline principal
+  Datos/          →  CSV en capas: Raw → Staging → Trusted
+  Modelado/       →  Entrenar modelos, comparar, guardar métricas
+  venvTaller1/    →  Entorno virtual Python (dependencias; no es código del taller)
+
+
+  Flujo típico de datos:
+    accidentes.csv (Raw)
+         ↓ limpieza / features
+    features_accidentes.csv + clima_limpio.csv (Trusted/Staging)
+         ↓ Join.ipynb
+    train_balanceado.csv + test_modelo.csv
+         ↓ notebooks Modelado/
+    métricas en Modelado/artifacts/
+
+
+================================================================================
+CARPETA: Datos/
+================================================================================
+Almacena los datasets en tres capas (calidad creciente).
+
+--- Datos/Raw/ ---
+  accidentes.csv
+    Registro crudo de accidentes de tránsito.
+    Columnas típicas: BARRIO, TW (fecha-hora), coordenadas, Mes, Dia, Hora, etc.
+    Punto de partida del pipeline.
+
+--- Datos/Staging/ ---
+  Datos intermedios ya limpiados o enriquecidos, listos para joins.
+
+  accidentes_staging_enriquecido.csv
+    Accidentes procesados / enriquecidos antes del join final.
+    Usado en algunos notebooks de exploración y en 1_baselines_y_evaluacion.
+
+  clima_limpio.csv
+    Datos meteorológicos limpios por barrio-hora (TW + BARRIO).
+    Variables: temperature, humidity, windSpeed, summary, etc.
+
+--- Datos/Trusted/ ---
+  Datos “confiables” para modelado.
+
+  features_accidentes.csv
+    Features de accidentes por llave BARRIO + TW.
+    Incluye variables temporales (hora_sin/cos, etc.) y
+    prom_accidentes_historico_barrio (cuando ya fue calculada).
+
+  datos_modelo.csv
+    Universo completo clima + target (~7,4 millones de filas).
+    MUY pesado en RAM; evitar leerlo entero en notebooks.
+    Preferir train_balanceado + test_modelo.
+
+  train_balanceado.csv
+    Muestra de entrenamiento balanceada 50/50 (~176k filas).
+    Usada por Random Forest, HistGradientBoosting y SGD tuned.
+
+  test_modelo.csv
+    Conjunto de prueba temporal real (~1,46M filas, desbalanceado).
+    Evaluación final de todos los modelos (lectura por chunks).
+
+
+================================================================================
+CARPETA: Exploración/
+================================================================================
+Trabajo inicial sobre datos crudos (antes del pipeline formal del Join).
+
+  hola.py
+    Archivo de prueba mínimo (casi vacío).
+
+--- Exploración/ExpoAccidentes/ ---
+  ExploracionAccidentes.ipynb
+    Exploración visual y estadística de accidentes crudos.
+
+  limpieza_raw.ipynb
+    Calidad y limpieza de datos raw de accidentes (sección 4.2 del taller).
+
+  limpieza_accidentes.ipynb
+    Limpieza adicional / transformaciones sobre accidentes.
+
+--- Exploración/ExploClima/ ---
+  DiagnósticoDatosClima.ipynb
+    Carga y diagnóstico inicial del dataset de clima (conexión, nulos, tipos).
+
+  LimpiezaClima.ipynb
+    Limpieza y preparación del clima hacia clima_limpio.csv.
+
+
+================================================================================
+CARPETA: EDA/
+================================================================================
+Análisis exploratorio más estructurado (después de tener datos más limpios).
+
+--- EDA/EDA_Accidentes/ ---
+  eda_accidentes.ipynb
+    EDA general de accidentes.
+
+  eda_accidentes_agg.ipynb
+    EDA agregado por barrio / temporal.
+    Aquí se define lógica de variables cíclicas (seno/coseno desde TW)
+    que luego replica Join.ipynb.
+
+--- EDA/EDA_Clima/ ---
+  EDAclima.ipynb
+    Distribución de variables numéricas del clima.
+
+  EDAClima1_0.ipynb
+    Carga y primeras vistas del dataset de clima.
+
+  EDAclimaTarget1.ipynb
+    EDA enfocado solo en filas con accidente (target = 1).
+
+
+================================================================================
+CARPETA: JoinXcodex/
+================================================================================
+Núcleo del proyecto: construye la tabla de modelado y entrena SGD.
+
+  TranformacionesAccidentesEnriquecido.ipynb
+    Construye / documenta la tabla features_accidentes.
+    Features por BARRIO + TW (promedios históricos, temporales, etc.).
+
+  TransformacionesClima.ipynb
+    Limpieza y transformación del clima.
+    Agrupa categorías raras de summary en "Otros".
+    Genera clima_limpio.csv.
+
+  Join.ipynb  ★ ARCHIVO CENTRAL ★
+    Pipeline completo en un solo notebook:
+      - Carga accidentes raw + features_accidentes
+      - Join con clima_limpio
+      - Construye df_modelo (universo ~7,4M con target 0/1)
+      - Reconstruye prom_accidentes_historico_barrio sin fuga
+      - Codificación (barrio_id, OHE de summary)
+      - Split temporal 80/20
+      - Baseline (siempre 0)
+      - SGD balanceado + ajuste de umbral
+      - Tuning SGD + SGD tuned
+      - Exporta train_balanceado.csv y test_modelo.csv
+      - Exporta métricas → Modelado/artifacts/metricas_baseline_sgd.csv
+
+
+================================================================================
+CARPETA: Modelado/
+================================================================================
+Entrenamiento de modelos de árboles / boosting y comparación final.
+
+  1_baselines_y_evaluacion.ipynb
+    Enfoque alternativo con bajo uso de RAM.
+    Construye target y split leyendo clima + accidentes por chunks.
+    Baselines y evaluación sin depender del Join completo en memoria.
+    Útil si datos_modelo.csv no cabe en RAM.
+
+  modeladoRandomForest.ipynb
+    Entrena Random Forest en train_balanceado.
+    Evalúa test_modelo por chunks.
+    Tuning de hiperparámetros + RF tuned.
+    Exporta metricas_rf.csv e importancia de variables.
+
+  modeladoHistGradientBoosting.ipynb
+    Entrena HistGradientBoostingClassifier.
+    Misma estrategia: train balanceado + test por chunks.
+    Tuning + HGB tuned + exporta metricas_hgb.csv.
+
+  comparacion_modelos.ipynb
+    NO entrena modelos.
+    Lee los 3 CSV de artifacts/ y arma tabla_comparativa_modelos.
+    Incluye celda manual de respaldo con valores fijos.
+
+  documentacion_modelos_comparados.txt
+    Documentación técnica: hiperparámetros, métricas, análisis comparativo.
+
+--- Modelado/artifacts/ ---
+  Carpeta de salidas reutilizables (no versionar CSV grandes si están en .gitignore).
+
+  split_meta.json
+    Metadatos del split: fecha_corte, random_state, n_train_bal, n_test,
+    lista de columnas feature.
+
+  metricas_baseline_sgd.csv
+    Métricas de Baseline + SGD tuned (desde Join.ipynb).
+
+  metricas_rf.csv
+    Métricas de Random Forest tuned.
+
+  metricas_hgb.csv
+    Métricas de HistGradientBoosting tuned.
+
+  tabla_comparativa_modelos.csv
+    Tabla final concatenada (salida de comparacion_modelos.ipynb).
+
+  .gitkeep
+    Placeholder para mantener la carpeta en git.
+
+
+================================================================================
+CARPETA: venvTaller1/
+================================================================================
+  Entorno virtual de Python del proyecto (scikit-learn, pandas, numpy, etc.).
+  No es código del taller; no editar manualmente.
+  Activar antes de ejecutar notebooks:
+    Windows: venvTaller1\Scripts\activate
+
+
+================================================================================
+TABLA RÁPIDA — ARCHIVOS POR TIPO
+================================================================================
+
+  NOTEBOOKS (17)
+  ─────────────────────────────────────────────────────────────────────────
+  JoinXcodex/Join.ipynb                          Pipeline principal + SGD
+  JoinXcodex/TranformacionesAccidentesEnriquecido.ipynb   Features accidentes
+  JoinXcodex/TransformacionesClima.ipynb         Limpieza clima
+  Modelado/modeladoRandomForest.ipynb            Random Forest
+  Modelado/modeladoHistGradientBoosting.ipynb    Gradient Boosting
+  Modelado/comparacion_modelos.ipynb             Tabla comparativa
+  Modelado/1_baselines_y_evaluacion.ipynb        Baselines (RAM baja)
+  EDA/... (6 notebooks)                          Exploración accidentes/clima
+  Exploración/... (5 notebooks)                  Limpieza inicial
+
+  DATOS CSV (7 en Datos/)
+  ─────────────────────────────────────────────────────────────────────────
+  Raw/accidentes.csv                             Crudo
+  Staging/*.csv                                  Intermedios
+  Trusted/*.csv                                  Modelado
+
+  DOCUMENTACIÓN / CONFIG (4)
+  ─────────────────────────────────────────────────────────────────────────
+  GUIA_DEL_PROYECTO.txt                          Esta guía
+  Modelado/documentacion_modelos_comparados.txt  Detalle de modelos
+  Modelado/artifacts/split_meta.json             Config del split
+  Exploración/hola.py                            Prueba mínima
+
+
+================================================================================
+¿QUÉ ARCHIVO ABRIR SEGÚN LO QUE NECESITES?
+================================================================================
+
+  Entender el pipeline completo          → JoinXcodex/Join.ipynb
+  Ver cómo se crean las features         → TranformacionesAccidentesEnriquecido.ipynb
+  Ver limpieza del clima                 → TransformacionesClima.ipynb
+  Entrenar / comparar modelos              → Modelado/*.ipynb
+  Tabla final de métricas                → comparacion_modelos.ipynb
+  Datos para entrenar (ligero)           → Datos/Trusted/train_balanceado.csv
+  Datos para evaluar (grande, chunks)    → Datos/Trusted/test_modelo.csv
+  Métricas ya calculadas                 → Modelado/artifacts/*.csv
+  Documentación de modelos               → documentacion_modelos_comparados.txt
+  Mapa del proyecto (esta guía)          → GUIA_DEL_PROYECTO.txt
+
+
+================================================================================
+NOTAS IMPORTANTES
+================================================================================
+
+  1. Llave universal del proyecto: BARRIO + TW (barrio en una hora concreta).
+
+  2. No leer datos_modelo.csv completo (~7,4M filas) si tienes poca RAM.
+
+  3. Los modelos “tuned” finales usan train_balanceado.csv, no X_train completo.
+
+  4. El test siempre es el mismo: test_modelo.csv (split temporal desde 2019-06-11).
+
+  5. Orden recomendado para reproducir resultados:
+       Transformaciones → Join (hasta export) → RF notebook → HGB notebook
+       → comparacion_modelos.ipynb
+
+================================================================================
+  FIN DE LA GUÍA
+================================================================================
